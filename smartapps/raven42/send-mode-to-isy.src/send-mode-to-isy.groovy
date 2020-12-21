@@ -81,7 +81,9 @@ def sendMode(mode) {
 
 def modeChangeHandler(evt) {
 	log.debug "modeChangeHandler() mode changed '${evt.value}'"
+
     def mode_map = [ Home: 20, Away: 21, Sleep: 22, Off: 23 ]
+
     if (location.modes?.find{it.name == evt.value}) {
     	log.debug "modeChangeHandler() found mode '${evt.value}' in location"
         if (mode_map.containsKey(evt.value)) {
