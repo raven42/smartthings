@@ -63,6 +63,12 @@ def mainPage() {
         	state.nodeNames = nodeNames
         	log.debug "found ${nodes.size()} nodes"
         }
+		def variables = getVariables()
+		def variableNames = variables.collect { entry -> entry.value.name }
+		if (variableNames.size() != state?.variableNames?.size()) {
+			state.variableNames = variableNames
+			log.debug "found ${variableNames.size()} variables"
+		}
         
         return dynamicPage(name:"mainPage", title:"ISY Connect", nextPage:"", refreshInterval:refreshInterval, install:true, uninstall:true) {
         	section("ISY Global Settings") {
@@ -72,6 +78,11 @@ def mainPage() {
             section("Select nodes...") {
                 input "selectedNodes", "enum", required:false, title:"Select Nodes \n(${state?.nodeNames?.size() ?: 0} found)", multiple:true, options:state?.nodeNames
             }
+			section("SmartThings Mode Handling") {
+				location.modes.each { mode ->
+					input "modeMap${mode}", "enum", required:false, title:"[${mode}] Mode Mapping", multiple:false, options:state?.variableNames
+				}
+			}
         }
     }
 }
@@ -201,20 +212,20 @@ def parseQueryNodes(resp) {
     
     log.debug "parseResponse() ${resp.description}"
     
-    def xmlTop = new XmlParser().parseText(resp.body)
-    //log.debug "xmlTop:[${xmlTop}]"
-    def xmlNodes = xmlTop.node
+    def xml = new XmlParser().parseText(resp.body)
+    //log.debug "xml:[${xml}]"
+    def xmlNodes = xml.node
     def printed = 0
     //log.debug "xmlNodes:[${xmlNodes}]"
-    xmlNodes.each { xml ->
-    	if (!(nodes[xml.address.text()])) {
+    xmlNodes.each { xmlNode ->
+    	if (!(nodes[xmlNode.address.text()])) {
         	def node = [:]
-        	node.address = xml.address.text()
-        	node.name = xml.name.text()
-            node.type = xml.type.text()
+        	node.address = xmlNode.address.text()
+        	node.name = xmlNode.name.text()
+            node.type = xmlNode.type.text()
             node.deviceNetworkId = "ISY:${node.address}"
             node.status = 0
-    		xml?.property.each { prop ->
+    		xmlNode?.property.each { prop ->
             	if (prop.@id.equals('ST')) {
             		node.status = prop.@value
                 }
@@ -253,14 +264,14 @@ def parseStatus(msg) {
     // log.debug "parseStatus() desc: ${msg.description}"
 	// log.debug "parseStatus() body: ${msg.body}"
     
-    def xmlTop = new XmlParser().parseText(msg.body)
-    def xmlNodes = xmlTop.nodes
-    xmlTop.each { xml ->
-    	def node = nodes.find { it.value.address == xml.@id }
+    def xml = new XmlParser().parseText(msg.body)
+    def xmlNodes = xml.nodes
+    xml.each { xmlNode ->
+    	def node = nodes.find { it.value.address == xmlNode.@id }
         if (node) {
         	def d = getAllChildDevices()?.find { it.device.deviceNetworkId == node.value.deviceNetworkId }
         	if (d) {
-            	d.parseStatus(xml)
+            	d.parseStatus(xmlNode)
             }
         }
     }
@@ -293,6 +304,60 @@ def getStatusLoop() {
     runIn(settings.updateInterval, getStatusLoop)
 }
 
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Variable and StateVar Routines
+
+def parseQueryVariables(resp) {
+	def nodes = getVariables()
+    
+    log.debug "parseResponse() ${resp.description}"
+    
+    def xml = new XmlParser().parseText(resp.body)
+    log.debug "xml:[${xml}]"
+    //def xmlVariables = xml.node
+    //def printed = 0
+    //log.debug "xmlVariables:[${xmlVariables}]"
+    // xmlVariables.each { xml ->
+    //     if (!(nodes[xml.address.text()])) {
+    //         def node = [:]
+    //         node.address = xml.address.text()
+    //         node.name = xml.name.text()
+    //         node.type = xml.type.text()
+    //         node.deviceNetworkId = "ISY:${node.address}"
+    //         node.status = 0
+    //         xml?.property.each { prop ->
+    //             if (prop.@id.equals('ST')) {
+    //                 node.status = prop.@value
+    //             }
+    //         }
+    //
+    //         state.nodes[node.address] = node
+    //
+    //         if ((printed % 50) == 0) {
+    //             log.debug "adding node:[${node}]"
+    //         }
+    //         printed += 1
+    //     }
+    // }
+}
+
+def queryVariables() {
+    def isy = getIsyHub()
+    if (!isy) { return }
+    def host = isy.value.networkAddress + ":" + isy.value.port
+    def auth = getAuthorization()
+        
+    log.debug "attempting to get nodes from ${host}"
+    
+    sendHubCommand(new physicalgraph.device.HubAction(
+        	'method': 'GET',
+        	'path': '/rest/vars',
+        	'headers': [
+        	    'HOST': host,
+        	    'Authorization': auth
+        	], null, [callback:parseQueryVariables]))
+}
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Child Device Interfaces
@@ -353,7 +418,18 @@ def getDebug() {
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Primary SmartApp routines
+// Mode Handling routines
+
+def modeChangeHandler(evt) {
+	log.debug "modeChangeHandler() mode changed ${evt.value}"
+	
+	if (settings.containsKey("modeMap${evt.value}")) {
+		log.debug "modeMap${evt.value}: [${settings.modeMap${evt.value}]"
+	}
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// SmartApp routines
 
 def installed() {
     // remove location subscription
@@ -410,4 +486,5 @@ def initialize() {
     }
     
     runIn(30, getStatusLoop)
+	subscribe(location, "mode", modeChangeHandler)
 }
