@@ -30,14 +30,31 @@ definition(
 preferences {
 	page(name: "mainPage")
     page(name: "discoveryPage")
+    page(name: "modeMapPage")
+    page(name: "clearNodesPage")
+    page(name: "clearNodesOpPage")
+    page(name: "queryNodesPage")
+    page(name: "clearVariablesPage")
+    page(name: "clearVariablesOpPage")
+    page(name: "queryVariablesPage")
+}
+
+def initPreferences() {
+    if (!state.initialized) {
+        log.debug "init()"
+    	state.initialized = true
+        settings.debug = false
+    	subscribe(location, "ssdpTerm.urn:udi-com:device:X_Insteon_Lighting_Device:1", ssdpHandler)
+        subscribe(location, null, responseHandler, [filterEvents:false])
+    }
 }
 
 def mainPage() {
-	log.debug "mainPage()"
+	if (settings.debug) { log.debug "mainPage()" }
     def refreshInterval = 5
     def refreshCount = !state.refreshCount ? 0 : state.refreshCount as int
     
-    init()
+    initPreferences()
     
     if (!selectedDevice) {
    		discover()
@@ -55,33 +72,32 @@ def mainPage() {
         }
         if (refreshCount == 0) {
         	getStatus()
+            queryDefinitions()
         }
 
         def nodes = getNodes()
         def nodeNames = nodes.collect { entry -> entry.value.name }
-        if (nodeNames.size() != state?.nodeNames?.size()) {
-        	state.nodeNames = nodeNames
-        	log.debug "found ${nodes.size()} nodes"
+        nodeNames.sort()
+        if (settings.debug) {
+        	log.debug "found ${nodeNames.size()} nodes"
         }
-		def variables = getVariables()
-		def variableNames = variables.collect { entry -> entry.value.name }
-		if (variableNames.size() != state?.variableNames?.size()) {
-			state.variableNames = variableNames
-			log.debug "found ${variableNames.size()} variables"
-		}
         
         return dynamicPage(name:"mainPage", title:"ISY Connect", nextPage:"", refreshInterval:refreshInterval, install:true, uninstall:true) {
         	section("ISY Global Settings") {
-            	input "updateInterval", "number", required: true, title: "Update Interval\nSeconds between polling intervals", defaultValue:30
-                input "debug", "bool", required: true, title: "Enable debug"
+                input "debug", "bool", required: true, title: "Enable debug", submitOnChange:true
+                if (settings.debug) {
+            		input "updateInterval", "number", required: true, title: "Update Interval\nSeconds between polling intervals", defaultValue:30
+                    href "clearNodesPage", title:"Clear NODE data", required:false, page:"clearNodesPage"
+                    href "queryNodesPage", title:"Initiate Node query", required:false, page:"queryNodesPage"
+                    href "clearVariablesPage", title:"Clear VARIABLE data", required:false, page:"clearVariablesPage"
+                    href "queryVariablesPage", title:"Initiage VARIABLE query", required:false, page:"queryVariablesPage"
+                }
             }
             section("Select nodes...") {
-                input "selectedNodes", "enum", required:false, title:"Select Nodes \n(${state?.nodeNames?.size() ?: 0} found)", multiple:true, options:state?.nodeNames
+                input "selectedNodes", "enum", required:false, title:"Select Nodes \n(${nodeNames.size() ?: 0} found)", multiple:true, options:nodeNames
             }
 			section("SmartThings Mode Handling") {
-				location.modes.each { mode ->
-					input "modeMap${mode}", "enum", required:false, title:"[${mode}] Mode Mapping", multiple:false, options:state?.variableNames
-				}
+            	href "modeMapPage", title:"SmartThings Mode Mapping", required:false, page:"modeMapPage"
 			}
         }
     }
@@ -100,14 +116,14 @@ def discoveryPage() {
  	
     def devices = getDevices()
  	def deviceNames = devices.collect { it.value.ip }
-    if (deviceNames.size() != state?.deviceNames?.size()) {
-    	state.deviceNames = deviceNames
-        log.debug "found ${state.deviceNames.size()} devices"
+    deviceNames.sort()
+    if (settings.debug) {
+    	log.debug "found ${deviceNames.size()} devices"
     }
      
  	return dynamicPage(name:"discoveryPage", title:"Discovery Started", nextPage:"", refreshInterval:refreshInterval, install:false, uninstall:false) {
  		section("Please wait while we discover your device. Select your device below once discovered.") {
- 			input "selectedDevice", "enum", required:true, title:"Select Devices \n(${state?.deviceNames?.size() ?: 0} found)", multiple:false, options:state?.deviceNames
+ 			input "selectedDevice", "enum", required:true, title:"Select Devices \n(${deviceNames.size() ?: 0} found)", multiple:false, options:deviceNames
  		}
         section("ISY Credentials") {
         	input "username", "text", title:"ISY Username", required:true
@@ -116,15 +132,96 @@ def discoveryPage() {
  	}
 }
 
-def init() {
-    if (!state.initialized) {
-        log.debug "init()"
-    	state.initialized = true
-        settings.debug = false
-    	subscribe(location, "ssdpTerm.urn:udi-com:device:X_Insteon_Lighting_Device:1", ssdpHandler)
-        subscribe(location, null, responseHandler, [filterEvents:false])
+def modeMapPage() {
+	if (settings.debug) { log.debug "modeMapPage()" }
+    def refreshInterval = 5
+    def refreshCount = !state.refreshCount ? 0 : state.refreshCount as int
+    state.refreshCount = refreshCount + 1
+        
+    if ((refreshCount % 5) == 0) {
+        queryVariables()
+    }
+    
+	def variables = getVariables()
+	def variableNames = variables.collect { "${it.value.name} (${it.value.type=='1'?'Var':'State'}:${it.value.id} Value:${it.value.value})" }
+    variableNames.sort()
+    if (settings.debug) {
+    	log.debug "found ${variableNames.size()} variables"
+    }
+    
+    return dynamicPage(name:"modeMapPage", title:"Mode Map Handling", nextPage:"", refreshInterval:refreshInterval, install:false, uninstall:false) {
+    	section("SmartThings Mode Handling") {
+        	paragraph "These mappings will set the specified ISY variable/state when the given SmartThings mode is changed."
+        }
+        section("ISY Mode Change Variable") {
+        	paragraph "First select the ISY variable you want modified when the mode changes."
+        	input "modeMapVariable", "enum", required:false, title:"Mode Map Variable", multiple:false, options:variableNames
+        }
+        section("Mode Values") {
+        	paragraph "Now select the ISY variable you want to set the \"ISY Mode Change Variable\" to for each available SmartThings mode."
+ 			location.modes.each { mode ->
+				input "modeMap${mode}", "enum", required:false, title:"[${mode}] Mode Mapping", multiple:false, options:variableNames
+			}
+		}
     }
 }
+
+def clearNodesPage() {
+	return dynamicPage(name:"clearNodesPage", title:"Clear NODE data...", nextPage:"", install:false, uninstall:false) {
+        section() {
+            paragraph "This will clear all node data and flush all nodes from the app. This might potentially break any connection to any child devices. Use with caution."
+        }
+        section("Are you sure?") {
+            href "clearNodesOpPage", title: "Proceed...", page:"clearNodesOpPage"
+            href "main", title:"Cancel Operation", page:"main"
+        }
+    }
+}
+
+def clearNodesOpPage() {
+	state.devices = [:]
+    settings.remove("selectedNodes")
+	
+    log.debug "settings:${settings}"
+    
+	return mainPage()
+}
+
+def queryNodesPage() {
+	getStatus()
+    
+    return mainPage()
+}
+
+def clearVariablesPage() {
+	return dynamicPage(name:"clearVariablesPage", title:"Clear VARIABLE data...", nextPage:"", install:false, uninstall:false) {
+        section() {
+            paragraph "This will clear all variable data and flush all variables from the app. Use with caution."
+        }
+        section("Are you sure?") {
+            href "clearVariablesOpPage", title: "Proceed...", page:"clearVariablesOpPage"
+            href "main", title:"Cancel Operation", page:"main"
+        }
+    }
+}
+
+def clearVariablesOpPage() {
+	state.variables = [:]
+    settings.remove("modeMapVariable")
+	location.modes.each { mode ->
+		settings.remove("modeMap${mode}")
+	}
+    log.debug "settings:${settings}"
+    
+    return mainPage()
+}
+
+def queryVariablesPage() {
+    queryDefinitions()
+    
+    return mainPage()
+}
+
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Network Layer Handler and Parser Routines
@@ -210,13 +307,13 @@ def getIsyHub() {
 def parseQueryNodes(resp) {
 	def nodes = getNodes()
     
-    log.debug "parseResponse() ${resp.description}"
+    if (settings.debug) { log.debug "parseQueryNodes() ${resp.description}" }
     
     def xml = new XmlParser().parseText(resp.body)
-    //log.debug "xml:[${xml}]"
+    //log.debug "parseQueryNodes() xml:[${xml}]"
     def xmlNodes = xml.node
     def printed = 0
-    //log.debug "xmlNodes:[${xmlNodes}]"
+    //log.debug "parseQueryNodes() xmlNodes:[${xmlNodes}]"
     xmlNodes.each { xmlNode ->
     	if (!(nodes[xmlNode.address.text()])) {
         	def node = [:]
@@ -247,7 +344,7 @@ def queryNodes() {
     def host = isy.value.networkAddress + ":" + isy.value.port
     def auth = getAuthorization()
         
-    log.debug "attempting to get nodes from ${host}"
+    if (settings.debug) { log.debug "attempting to get nodes from ${host}" }
     
     sendHubCommand(new physicalgraph.device.HubAction(
         	'method': 'GET',
@@ -309,37 +406,36 @@ def getStatusLoop() {
 // Variable and StateVar Routines
 
 def parseQueryVariables(resp) {
-	def nodes = getVariables()
+	def variables = getVariables()
     
-    log.debug "parseResponse() ${resp.description}"
+    //log.debug "parseQueryVariables() ${resp.description}"
     
     def xml = new XmlParser().parseText(resp.body)
-    log.debug "xml:[${xml}]"
-    //def xmlVariables = xml.node
-    //def printed = 0
+    //log.debug "parseQueryVariables() xml:[${xml}]"
+    //def xmlVariables = xml.vars
+    def printed = 0
     //log.debug "xmlVariables:[${xmlVariables}]"
-    // xmlVariables.each { xml ->
-    //     if (!(nodes[xml.address.text()])) {
-    //         def node = [:]
-    //         node.address = xml.address.text()
-    //         node.name = xml.name.text()
-    //         node.type = xml.type.text()
-    //         node.deviceNetworkId = "ISY:${node.address}"
-    //         node.status = 0
-    //         xml?.property.each { prop ->
-    //             if (prop.@id.equals('ST')) {
-    //                 node.status = prop.@value
-    //             }
-    //         }
-    //
-    //         state.nodes[node.address] = node
-    //
-    //         if ((printed % 50) == 0) {
-    //             log.debug "adding node:[${node}]"
-    //         }
-    //         printed += 1
-    //     }
-    // }
+    xml.var.each { xmlVar ->
+    	def uniqueId = "${xmlVar.@type}.${xmlVar.@id}"
+    	if (!variables[uniqueId]) {
+        	def variable = [:]
+            variable.uniqueId = uniqueId
+            variable.id = xmlVar.@id
+            variable.type = xmlVar.@type
+            variable.value = xmlVar.val.text()
+    
+            state.variables[uniqueId] = variable
+        }
+        def variable = variables[uniqueId]
+    	variable.value = xmlVar.val.text()
+    
+        if (settings.debug) {
+            if ((printed % 50) == 0) {
+                log.debug "variable:${variable} xmlVar:[${xmlVar}]"
+            }
+            printed += 1
+        }
+    }
 }
 
 def queryVariables() {
@@ -347,17 +443,123 @@ def queryVariables() {
     if (!isy) { return }
     def host = isy.value.networkAddress + ":" + isy.value.port
     def auth = getAuthorization()
-        
-    log.debug "attempting to get nodes from ${host}"
+    
+    if (settings.debug) {
+    	log.debug "attempting to variables from ${host}"
+    }
     
     sendHubCommand(new physicalgraph.device.HubAction(
         	'method': 'GET',
-        	'path': '/rest/vars',
+        	'path': '/rest/vars/get/1',
+        	'headers': [
+        	    'HOST': host,
+        	    'Authorization': auth
+        	], null, [callback:parseQueryVariables]))
+    sendHubCommand(new physicalgraph.device.HubAction(
+        	'method': 'GET',
+        	'path': '/rest/vars/get/2',
         	'headers': [
         	    'HOST': host,
         	    'Authorization': auth
         	], null, [callback:parseQueryVariables]))
 }
+
+def parseQueryIntDefinitions(resp) {
+	def variables = getVariables()
+    
+    //log.debug "parseQueryDefinitions() ${resp.description}"
+    
+    def xml = new XmlParser().parseText(resp.body)
+    //log.debug "parseQueryDefinitions() xml:[${xml}]"
+    //def xmlVariables = xml.vars
+    def printed = 0
+    //log.debug "xmlVariables:[${xmlVariables}]"
+    xml.e.each { xmlVar ->
+    	def uniqueId = "1.${xmlVar.@id}"
+    	if (!variables[uniqueId]) {
+        	def variable = [:]
+            variable.uniqueId = uniqueId
+            variable.id = xmlVar.@id
+            variable.type = "1"
+            variable.name = xmlVar.@name
+    
+            state.variables[uniqueId] = variable
+        }
+    	def variable = variables[uniqueId]
+        variable.name = xmlVar.@name
+        
+    	if (settings.debug && (printed % 50) == 0) {
+        	log.debug "parseQueryIntDefinitions() variable:${variable} xmlVar:[${xmlVar}]"
+        }
+        printed += 1
+    }
+}
+
+def parseQueryStateDefinitions(resp) {
+	def variables = getVariables()
+    
+    //log.debug "parseQueryDefinitions() ${resp.description}"
+    
+    def xml = new XmlParser().parseText(resp.body)
+    //log.debug "parseQueryDefinitions() xml:[${xml}]"
+    //def xmlVariables = xml.vars
+    def printed = 0
+    //log.debug "xmlVariables:[${xmlVariables}]"
+    xml.e.each { xmlVar ->
+    	def uniqueId = "2.${xmlVar.@id}"
+    	if (!variables[uniqueId]) {
+        	def variable = [:]
+            variable.uniqueId = uniqueId
+            variable.id = xmlVar.@id
+            variable.type = "2"
+            variable.name = xmlVar.@name
+    
+            state.variables[variable.uniqueId] = variable
+        }
+    	def variable = variables[uniqueId]
+        variable.name = xmlVar.@name
+        
+    	if (settings.debug && (printed % 50) == 0) {
+        	log.debug "parseQueryStateDefinitions() variable:${variable} xmlVar:[${xmlVar}]"
+        }
+        printed += 1
+    }
+}
+
+def queryDefinitions() {
+    def isy = getIsyHub()
+    if (!isy) { return }
+    def host = isy.value.networkAddress + ":" + isy.value.port
+    def auth = getAuthorization()
+    
+    if (settings.debug) {
+    	log.debug "attempting to get variable definitions from ${host}"
+    }
+    
+    sendHubCommand(new physicalgraph.device.HubAction(
+        	'method': 'GET',
+        	'path': '/rest/vars/definitions/1',
+        	'headers': [
+        	    'HOST': host,
+        	    'Authorization': auth
+        	], null, [callback:parseQueryIntDefinitions]))
+    sendHubCommand(new physicalgraph.device.HubAction(
+        	'method': 'GET',
+        	'path': '/rest/vars/definitions/2',
+        	'headers': [
+        	    'HOST': host,
+        	    'Authorization': auth
+        	], null, [callback:parseQueryStateDefinitions]))
+}
+
+def getVariablesLoop() {
+    queryVariables()
+    if (settings.updateInterval < 10) {
+    	settings.updateInterval = 10
+    }
+    runIn(settings.updateInterval, getVariablesLoop)
+}
+
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Child Device Interfaces
@@ -413,6 +615,10 @@ def getNodes() {
     if (!state.nodes) { state.nodes = [:] }
     state.nodes
 }
+def getVariables() {
+	if (!state.variables) { state.variables = [:] }
+    state.variables
+}
 def getDebug() {
 	settings.debug
 }
@@ -420,11 +626,48 @@ def getDebug() {
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Mode Handling routines
 
+def parseModeChange(resp) {
+	if (settings.debug) { log.debug "parseModeChange() resp:[${resp}]" }
+    def description = resp.description
+    def msg = parseLanMessage(description)
+    
+    if (settings.debug) { log.trace "parsedResponse:[${msg}]" }
+    if (msg.status == 200) {
+    	log.debug "parseModeChange() success"
+    } else {
+    	log.warn "parseModeChange() failed status:${msg.status} resp:[${msg}]"
+    }
+}
+
 def modeChangeHandler(evt) {
 	log.debug "modeChangeHandler() mode changed ${evt.value}"
+    def isy = getIsyHub()
+    if (!isy) { return }
+    def host = isy.value.networkAddress + ":" + isy.value.port
+    def auth = getAuthorization()
+    def variables = getVariables()
 	
-	if (settings.containsKey("modeMap${evt.value}")) {
-		log.debug "modeMap${evt.value}: [${settings.modeMap${evt.value}]"
+    if (!(settings?.modeMapVariable)) {
+    	log.debug "modeChangeHandler() modeMapVariable not set"
+        return
+    }
+    
+    //log.debug "settings:${settings} looking for modeMap${evt.value}"
+	if (settings?."modeMap${evt.value}") {
+    	def mapping = settings."modeMap${evt.value}"
+        def modeMapVariable = variables.find { settings.modeMapVariable.startsWith(it.value.name) }
+        def mappingVariable = variables.find { mapping.startsWith(it.value.name) }
+        if (modeMapVariable && mappingVariable) {
+           	def path = "/rest/vars/set/${modeMapVariable.value.type}/${modeMapVariable.value.id}/${mappingVariable.value.value}"
+			log.debug "modeMap${evt.value}: setting ${modeMapVariable.value.name} to ${mappingVariable.value.name}"
+            sendHubCommand(new physicalgraph.device.HubAction(
+           	        'method': 'GET',
+           	        'path': path,
+           	        'headers': [
+           	            'HOST': host,
+           	            'Authorization': auth
+           	        ], null, [callback:parseModeChange]))
+        }
 	}
 }
 
@@ -446,6 +689,9 @@ def updated() {
 def initialize() {
     log.debug('Initializing')
 
+    state.refreshCount = 0
+	state.hubRefresh = 0
+    
     def isyHub = getIsyHub()
     def nodes = getNodes()
     def nodeTypes = [
@@ -480,11 +726,12 @@ def initialize() {
                 ])
                 d.update()
            } else {
-            	log.warning "Unknown device type ${node}"
+            	log.warn "Unknown device type ${node}"
            }
         }
     }
     
-    runIn(30, getStatusLoop)
 	subscribe(location, "mode", modeChangeHandler)
+    runIn(5, getVariablesLoop)
+    runIn(15, getStatusLoop)
 }
