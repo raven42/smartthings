@@ -42,35 +42,42 @@ metadata {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Response Parsing
-def parse(description) {
-	log.trace "parse($description)"
 
-	def results = []
-    def msg = parseLanMessage(description)
-    def json = msg.json
-    log.trace "MESSAGE Result: $msg"
-    if (msg.status == 200 || msg.header.startsWith('POST')) {
-    	log.debug "JSON Result: $json"
-        json.each {
-        	def n = it.getKey()
-        	if (n != "status") {
-            	def v = it.getValue()
-        		results << createEvent(name: n, value: v)
-        	}
+def statusUpdate(xml) {
+	def level = device.getDataValue("status")
+    if (xml.status) {
+    	level = xml.status.text() as int
+
+        log.debug "dm.statusUpdate() device.status:${device.getDataValue("status")} -> status:${level} xml:${xml}"
+        if (device.getDataValue("status") != level) {
+            if (level > 0) {
+                sendEvent(name: "switch", value: "on")
+            } else {
+                sendEvent(name: "switch", value: "off")
+            }
         }
     }
-
-	results
 }
 
-def parseResponse(resp) {
-	def json = resp.json
-    log.debug "JSON Result: $json"
-    json.each {
-    	def n = it.key
-        if (n != "status") {
-            def v = it.value
-            sendEvent(name: n, value: v)
+def update() {
+	log.debug "dm.update() status:${device.getDataValue("status")}"
+    def level = device.getDataValue("status") as int
+    if (level > 0) {
+        sendEvent(name: "switch", value: "on")
+    } else {
+        sendEvent(name: "switch", value: "off")
+    }
+}
+
+def parseNode(msg) {
+    msg?.property.each { prop ->
+    	if (prop.@id.equals("ST") && prop.@value != device.getDataValue("status")) {
+        	device.updateDataValue("status", prop.@value)
+            if (prop.@value > 0) {
+            	sendEvent(name: "switch", value: "on")
+            } else {
+            	sendEvent(name: "switch", value: "off")
+            }
         }
     }
 }
@@ -80,13 +87,7 @@ def parseStatus(msg) {
     	log.debug "dm.parseStatus() msg:[${msg}]"
     }
     msg?.property.each { prop ->
-		if (prop.@id.equals("OL") && prop.@value != device.getDataValue("onLevel")) {
-        	log.debug "dm.parseStatus() onLevel:${device.getDataValue("onLevel")} -> ${prop.@value}"
-            device.updateDataValue("onLevel", prop.@value)
-        } else if (prop.@id.equals("RR") && prop.@value != device.getDataValue("rampRate")) {
-        	log.debug "dm.parseStatus() rampRate:${device.getDataValue("rampRate")} -> ${prop.@value}"
-            device.updateDataValue("rampRate", prop.@value)
-        } else if (prop.@id.equals("ST") && prop.@value != device.getDataValue("status")) {
+		if (prop.@id.equals("ST") && prop.@value != device.getDataValue("status")) {
         	log.debug "dm.parseStatus() status:${device.getDataValue("status")} -> ${prop.@value}"
             device.updateDataValue("status", prop.@value)
             if (prop.@value > 0) {
@@ -97,7 +98,6 @@ def parseStatus(msg) {
         }
     }
 }
-
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////
 // Switch commands
