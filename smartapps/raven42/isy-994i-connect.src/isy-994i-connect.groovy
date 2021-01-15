@@ -39,13 +39,38 @@ preferences {
     page(name: "queryVariablesPage")
 }
 
+// This block defines an endpoint, and which functions will fire depending on which type
+// of HTTP request you send
+mappings {
+    // The path is appended to the endpoint to make requests
+    path("/node") {
+        // These actions link HTTP verbs to specific callback functions in your SmartApp
+        action: [
+            GET: "nodeStatusGet",
+            PUT: "nodeStatusPut",
+            POST: "nodeStatusPost",
+        ]
+    }
+}
+
+// Callback functions
+def nodeStatusGet() {
+    log.debug "nodeStatusGet() request:${request}"
+}
+def nodeStatusPut() {
+    log.debug "nodeStatusPut() request:${request}"
+}
+def nodeStatusPost() {
+    log.debug "nodeStatusPost() request:${request}"
+}
+
 def initPreferences() {
     if (!state.initialized) {
         log.debug "init()"
     	state.initialized = true
-        settings.debug = false
+        settings.debug = true
     	subscribe(location, "ssdpTerm.urn:udi-com:device:X_Insteon_Lighting_Device:1", ssdpHandler)
-        subscribe(location, null, responseHandler, [filterEvents:false])
+        // subscribe(location, null, responseHandler, [filterEvents:false])
     }
 }
 
@@ -71,12 +96,13 @@ def mainPage() {
             queryNodes()
         }
         if (refreshCount == 0) {
-        	getStatus()
+        	queryStatus()
             queryDefinitions()
         }
 
         def nodes = getNodes()
-        def nodeNames = nodes.collect { entry -> entry.value.name }
+        def nodeNames = nodes.findAll { it.value.name && it.value.onLevel }.collect{ key, value -> value.name}
+        //def nodeNames = nodes.collect { entry -> entry.value.name }
         nodeNames.sort()
         if (settings.debug) {
         	log.debug "found ${nodeNames.size()} nodes"
@@ -87,10 +113,19 @@ def mainPage() {
                 input "debug", "bool", required: true, title: "Enable debug", submitOnChange:true
                 if (settings.debug) {
             		input "updateInterval", "number", required: true, title: "Update Interval\nSeconds between polling intervals", defaultValue:30
-                    href "clearNodesPage", title:"Clear NODE data", required:false, page:"clearNodesPage"
-                    href "queryNodesPage", title:"Initiate Node query", required:false, page:"queryNodesPage"
-                    href "clearVariablesPage", title:"Clear VARIABLE data", required:false, page:"clearVariablesPage"
-                    href "queryVariablesPage", title:"Initiage VARIABLE query", required:false, page:"queryVariablesPage"
+                }
+            }
+            if (settings.debug) {
+                section("ISY Node Settings") {
+                	input "queryNodesOnRefresh", "bool", title:"Include NODE in polling interval", defaultValue:true, submitOnChange:true 
+                	href "clearNodesPage", title:"Clear NODE data", required:false, page:"clearNodesPage"
+                    href "queryNodesPage", title:"Initiate NODE query", required:false, page:"queryNodesPage"
+                    input "nodeQueryMethod", "enum", required:false, title:"Node refresh method", multiple:false, options:["/rest/status", "/rest/nodes"]
+                }
+                section("ISY Variable Settings") {
+                   	input "queryVariablesOnRefresh", "bool", title:"Include VARIABLES in polling interval", defaultValue:true, submitOnChange:true
+                   	href "clearVariablesPage", title:"Clear VARIABLE data", required:false, page:"clearVariablesPage"
+                   	href "queryVariablesPage", title:"Initiate VARIABLE query", required:false, page:"queryVariablesPage"
                 }
             }
             section("Select nodes...") {
@@ -188,7 +223,7 @@ def clearNodesOpPage() {
 }
 
 def queryNodesPage() {
-	getStatus()
+	queryStatus()
     
     return mainPage()
 }
@@ -271,17 +306,28 @@ def parse(evt) {
 	log.debug "parse() evt:[${evt}]"
 }
 
-def responseHandler(evt) {
-	log.debug "responseHandler() evt:[${evt}]"
+def statusUpdate(evt) {
+	if (settings.debug) {
+    	log.debug "statusUpdate() evt:[${evt}]"
+    }
 	def hub = evt?.hubId
 	def parsedEvent = parseLanMessage(evt.description)
-    parsedEvent << ["hub":hub]
-    def child = getChildDevices()?.find {
-    	(it.getDataValue("networkAddress") == parsedEvent?.networkAddress) ||
-        (it.getDataValue("mac") == parsedEvent?.mac && (parsedEvent?.headers?.sid == null || it.deviceNetworkId == parsedEvent?.headers?.sid))
-    }
-    if (child) {
-    	child.parseResponse(parsedEvent)
+    if (parsedEvent) {
+        parsedEvent << ["hub":hub]
+        if (parsedEvent?.headers?."content-type".equals("application/xml")) {
+            //log.debug "statusUpdate() parsedEvent:${parsedEvent}"
+
+            def xml = new XmlParser().parseText(parsedEvent?.body)
+            xml.nodes.node.each { xmlNode ->
+                def child = getChildDevices()?.find { (it.getDataValue("nodeAddress").equals(xmlNode?.id?.text())) }
+                if (child) {
+                    log.debug "statusUpdate() id:${xmlNode.id.text()} status:${xmlNode.status.text()} sending statusUpdate() to ${child}"
+                    child.statusUpdate(xmlNode)
+                }
+            }
+        } else {
+        	log.debug "statusUpdate() ignoring event:${parsedEvent}"
+        }
     }
 }
 
@@ -307,35 +353,54 @@ def getIsyHub() {
 def parseQueryNodes(resp) {
 	def nodes = getNodes()
     
-    if (settings.debug) { log.debug "parseQueryNodes() ${resp.description}" }
+    if (settings.debug) {
+    	log.debug "parseQueryNodes() ${resp.description}"
+        //log.trace "parseQueryNodes() body:${resp.body}"
+    }
     
     def xml = new XmlParser().parseText(resp.body)
     //log.debug "parseQueryNodes() xml:[${xml}]"
     def xmlNodes = xml.node
     def printed = 0
-    //log.debug "parseQueryNodes() xmlNodes:[${xmlNodes}]"
-    xmlNodes.each { xmlNode ->
+    def printInterval = 150
+    log.debug "parseQueryNodes() xmlNodes:[${xmlNodes}]"
+    xmlNodes?.each { xmlNode ->
+        if (settings.debug && (printed % printInterval) == 0) {
+    		log.debug "Looking for node:${xmlNode.address.text()} xmlNode:${xmlNode}"
+        }
     	if (!(nodes[xmlNode.address.text()])) {
         	def node = [:]
         	node.address = xmlNode.address.text()
         	node.name = xmlNode.name.text()
             node.type = xmlNode.type.text()
-            node.deviceNetworkId = "ISY:${node.address}"
+            node.deviceNetworkId = "ISY:${node.address.replaceAll(" ", ".")}"
             node.status = 0
     		xmlNode?.property.each { prop ->
-            	if (prop.@id.equals('ST')) {
-            		node.status = prop.@value
+            	if (settings.debug) { log.debug "node:${node.name} property:${prop}" }
+            	if (prop.@id.equals('ST') && prop.@value) {
+            		node.status = isy2stLevel(prop.@value)
                 }
             }
         
             state.nodes[node.address] = node
             
-            if ((printed % 50) == 0) {
+            if (settings.debug && (printed % printInterval) == 0) {
                 log.debug "adding node:[${node}]"
             }
-            printed += 1
+        } else {
+        	def node = nodes[xmlNode.address.text()]
+            if (settings.debug && (printed % printInterval) == 0) {
+            	log.debug "Looking for child device dni:${node?.value?.deviceNetworkId} for node:${node}"
+            }
+            def d = getChildDevices()?.find { it.device.deviceNetworkId == node?.value?.deviceNetworkId }
+            if (d) {
+            	if (settings.debug && (printed % printInterval) == 0) { log.debug "Found child device:${d}" }
+                //d.parseNode(xmlNode)
+            }
         }
+        printed += 1
     }
+    log.debug "parseQueryNodes() complete"
 }
 
 def queryNodes() {
@@ -344,11 +409,12 @@ def queryNodes() {
     def host = isy.value.networkAddress + ":" + isy.value.port
     def auth = getAuthorization()
         
-    if (settings.debug) { log.debug "attempting to get nodes from ${host}" }
+    if (settings.debug) { log.debug "query nodes from ${host}" }
     
     sendHubCommand(new physicalgraph.device.HubAction(
         	'method': 'GET',
         	'path': '/rest/nodes',
+            'protocol' : physicalgraph.device.Protocol.LAN,
         	'headers': [
         	    'HOST': host,
         	    'Authorization': auth
@@ -366,22 +432,30 @@ def parseStatus(msg) {
     xml.each { xmlNode ->
     	def node = nodes.find { it.value.address == xmlNode.@id }
         if (node) {
-        	def d = getAllChildDevices()?.find { it.device.deviceNetworkId == node.value.deviceNetworkId }
-        	if (d) {
-            	d.parseStatus(xmlNode)
+            xmlNode?.property.each { prop ->
+                if (prop.@id.equals("OL") && prop.@value) {
+                    node.value.onLevel = isy2stLevel(prop.@value)
+                    log.debug "dm.parseStatus() onLevel:${prop.@value} for node:${node}"
+                } else if (prop.@id.equals("RR") && prop.@value) {
+                    node.value.rampRate = prop.@value
+                    log.debug "dm.parseStatus() rampRate:${prop.@value} for node:${node}"
+                } else if (prop.@id.equals("ST") && prop.@value) {
+                    node.value.status = isy2stLevel(prop.@value)
+                    log.debug "dm.parseStatus() status:${prop.@value} for node:${node}"
+                }
             }
         }
     }
 }
 
-def getStatus() {
+def queryStatus() {
     def isy = getIsyHub()
     if (!isy) { return }
     def host = isy.value.networkAddress + ":" + isy.value.port
     def auth = getAuthorization()
     
     if (settings.debug) {
-    	log.debug "debug:${settings.debug} attempting to get nodes from ${host}"
+    	log.debug "queryStatus() from ${host}"
     }
     
     sendHubCommand(new physicalgraph.device.HubAction(
@@ -393,12 +467,18 @@ def getStatus() {
         	], null, [callback:parseStatus]))
 }
 
-def getStatusLoop() {
-	getStatus()
+def queryStatusLoop() {
+	if (settings?.queryNodesOnRefresh) {
+        if (settings?.nodeQueryMethod?.equals("/rest/nodes")) {
+            queryNodes()
+        } else {
+            queryStatus()
+        }
+    }
     if (settings.updateInterval < 10) {
     	settings.updateInterval = 10
     }
-    runIn(settings.updateInterval, getStatusLoop)
+    //runIn(settings.updateInterval, queryStatusLoop)
 }
 
 
@@ -552,12 +632,14 @@ def queryDefinitions() {
         	], null, [callback:parseQueryStateDefinitions]))
 }
 
-def getVariablesLoop() {
-    queryVariables()
+def queryVariablesLoop() {
+    if (settings.queryVariablesOnRefresh) {
+    	queryVariables()
+    }
     if (settings.updateInterval < 10) {
     	settings.updateInterval = 10
     }
-    runIn(settings.updateInterval, getVariablesLoop)
+    //runIn(settings.updateInterval, queryVariablesLoop)
 }
 
 
@@ -622,6 +704,14 @@ def getVariables() {
 def getDebug() {
 	settings.debug
 }
+def isy2stLevel(isyLevel) {
+	def stLevel = isyLevel.toFloat() * 100.0 / 255.0
+    stLevel as int
+}
+def st2isyLevel(stLevel) {
+	def isyLevel = stLevel.toFloat() * 255.0 / 100.0
+    isyLevel as int
+}
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Mode Handling routines
@@ -671,6 +761,25 @@ def modeChangeHandler(evt) {
 	}
 }
 
+def printDebugInfo() {
+	if (settings.debug) {
+    	log.debug "printDebugInfo()"
+        def hub = location.hubs[0]
+        log.debug "id: ${hub.id}"
+        log.debug "zigbeeId: ${hub.zigbeeId}"
+        log.debug "zigbeeEui: ${hub.zigbeeEui}"
+
+        // PHYSICAL or VIRTUAL
+        log.debug "type: ${hub.type}"
+
+        log.debug "name: ${hub.name}"
+        log.debug "firmwareVersionString: ${hub.firmwareVersionString}"
+        log.debug "localIP: ${hub.localIP}"
+        log.debug "localSrvPortTCP: ${hub.localSrvPortTCP}"
+    }
+}
+
+
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // SmartApp routines
 
@@ -689,6 +798,17 @@ def updated() {
 def initialize() {
     log.debug('Initializing')
 
+    settings.remove("eventVariableOnCloset")
+    settings.remove("triggerVariable")
+    settings.remove("eventVariableOn")
+    settings.remove("eventVariableOff")
+    settings.remove("triggerVariableCloset")
+    settings.remove("eventVariableOnCloset")
+    settings.remove("eventVariableOffCloset")
+    settings.remove("triggerVariableBlue")
+    settings.remove("eventVariableOnBlue")
+    settings.remove("eventVariableOffBlue")
+    
     state.refreshCount = 0
 	state.hubRefresh = 0
     
@@ -702,13 +822,14 @@ def initialize() {
         '2.55.72.0':	'ISY Switch',		// Plugin On/Off Module
         '5.11.16.0':	'ISY Thermostat',	// Thermostat
         '2.42.68.0':	'ISY Switch',		// On/Off Switch
+        '2.56.67.0':	'ISY Switch',		// On/Off Plugin Module (exterior)
     ]
 
 	if (!isyHub) { return }
     
     settings.selectedNodes.each { nodeAddr ->
         def node = nodes.find { it.value.name == nodeAddr }
-        def d = getAllChildDevices()?.find { it.device.deviceNetworkId == node.value.deviceNetworkId }
+        def d = getChildDevices()?.find { it.device.deviceNetworkId == node.value.deviceNetworkId }
         if (!d) {
             if (nodeTypes[node.value.type]) {
             	def data = [
@@ -716,13 +837,13 @@ def initialize() {
                         "nodeAddress": node.value.address,
                         "deviceNetworkId": node.value.deviceNetworkId,
                         "status": node.value.status,
-                        "onLevel": node.value?.onLevel,
-                        "rampRate": node.value?.rampRate,
+                        "onLevel": node.value.onLevel,
+                        "rampRate": node.value.rampRate,
                     ]
             	log.debug("Adding node [${node.value.name}] to [${isyHub.value.hub}] as [${node.value.deviceNetworkId}]: ${data}")
                 d = addChildDevice("raven42", nodeTypes[node.value.type], node.value.deviceNetworkId, isyHub?.value.hub, [
                     "label": node.value.name,
-                    "data": data
+                    "data": data,
                 ])
                 d.update()
            } else {
@@ -731,7 +852,11 @@ def initialize() {
         }
     }
     
+    subscribe(location, null, statusUpdate, [filterEvents:false])
 	subscribe(location, "mode", modeChangeHandler)
-    runIn(5, getVariablesLoop)
-    runIn(15, getStatusLoop)
+    //runEvery1Minute(queryVariablesLoop)
+    //runEvery1Minute(queryStatusLoop)
+   	//runEvery1Minute(printDebugInfo)
+    //runIn(5, queryVariablesLoop)
+    //runIn(15, queryStatusLoop)
 }
