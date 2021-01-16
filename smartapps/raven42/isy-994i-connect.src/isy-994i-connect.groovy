@@ -76,7 +76,7 @@ def initPreferences() {
 
 def mainPage() {
 	if (settings.debug) { log.debug "mainPage()" }
-    def refreshInterval = 5
+    def refreshInterval = 10
     def refreshCount = !state.refreshCount ? 0 : state.refreshCount as int
     
     initPreferences()
@@ -96,16 +96,22 @@ def mainPage() {
             queryNodes()
         }
         if (refreshCount == 0) {
-        	queryStatus()
-            queryDefinitions()
+        	//queryStatus()
+            //queryDefinitions()
         }
 
         def nodes = getNodes()
-        def nodeNames = nodes.findAll { it.value.name && it.value.onLevel }.collect{ key, value -> value.name}
-        //def nodeNames = nodes.collect { entry -> entry.value.name }
+        def nodeNames = nodes.findAll { it.value.name }.collect{ key, value -> value.name}
         nodeNames.sort()
         if (settings.debug) {
         	log.debug "found ${nodeNames.size()} nodes"
+        }
+        
+        def scenes = getScenes()
+        def sceneNames = scenes.findAll { it.value.name }.collect{ key, value -> value.name}
+        sceneNames.sort()
+        if (settings.debug) {
+        	log.debug "found ${sceneNames.size()} nodes"
         }
         
         return dynamicPage(name:"mainPage", title:"ISY Connect", nextPage:"", refreshInterval:refreshInterval, install:true, uninstall:true) {
@@ -115,6 +121,15 @@ def mainPage() {
             		input "updateInterval", "number", required: true, title: "Update Interval\nSeconds between polling intervals", defaultValue:30
                 }
             }
+            section("Select nodes...") {
+                input "selectedNodes", "enum", required:false, title:"Select Nodes \n(${nodeNames.size() ?: 0} found)", multiple:true, options:nodeNames
+            }
+			section("Select scenes...") {
+            	input "selectedScenes", "enum", required:false, title:"Select Scenes \n(${sceneNames.size() ?: 0} found)", multiple:true, options:sceneNames
+			}
+			section("SmartThings Mode Handling") {
+            	href "modeMapPage", title:"SmartThings Mode Mapping", required:false, page:"modeMapPage"
+			}
             if (settings.debug) {
                 section("ISY Node Settings") {
                 	input "queryNodesOnRefresh", "bool", title:"Include NODE in polling interval", defaultValue:true, submitOnChange:true 
@@ -128,12 +143,6 @@ def mainPage() {
                    	href "queryVariablesPage", title:"Initiate VARIABLE query", required:false, page:"queryVariablesPage"
                 }
             }
-            section("Select nodes...") {
-                input "selectedNodes", "enum", required:false, title:"Select Nodes \n(${nodeNames.size() ?: 0} found)", multiple:true, options:nodeNames
-            }
-			section("SmartThings Mode Handling") {
-            	href "modeMapPage", title:"SmartThings Mode Mapping", required:false, page:"modeMapPage"
-			}
         }
     }
 }
@@ -352,6 +361,7 @@ def getIsyHub() {
 
 def parseQueryNodes(resp) {
 	def nodes = getNodes()
+    def scenes = getScenes()
     
     if (settings.debug) {
     	log.debug "parseQueryNodes() ${resp.description}"
@@ -360,11 +370,10 @@ def parseQueryNodes(resp) {
     
     def xml = new XmlParser().parseText(resp.body)
     //log.debug "parseQueryNodes() xml:[${xml}]"
-    def xmlNodes = xml.node
     def printed = 0
     def printInterval = 150
     log.debug "parseQueryNodes() xmlNodes:[${xmlNodes}]"
-    xmlNodes?.each { xmlNode ->
+    xml?.node?.each { xmlNode ->
         if (settings.debug && (printed % printInterval) == 0) {
     		log.debug "Looking for node:${xmlNode.address.text()} xmlNode:${xmlNode}"
         }
@@ -387,18 +396,36 @@ def parseQueryNodes(resp) {
             if (settings.debug && (printed % printInterval) == 0) {
                 log.debug "adding node:[${node}]"
             }
-        } else {
-        	def node = nodes[xmlNode.address.text()]
-            if (settings.debug && (printed % printInterval) == 0) {
-            	log.debug "Looking for child device dni:${node?.value?.deviceNetworkId} for node:${node}"
-            }
-            def d = getChildDevices()?.find { it.device.deviceNetworkId == node?.value?.deviceNetworkId }
-            if (d) {
-            	if (settings.debug && (printed % printInterval) == 0) { log.debug "Found child device:${d}" }
-                //d.parseNode(xmlNode)
-            }
         }
         printed += 1
+    }
+    
+    printed = 0
+    xml?.group?.each { xmlScene ->
+        if (settings.debug && (printed % printInterval) == 0) {
+    		log.debug "Looking for scene:${xmlScene.address.text()} xmlScene:${xmlScene}"
+        }
+    	if (!(scenes[xmlScene.address.text()])) {
+        	def scene = [:]
+        	scene.address = xmlScene.address.text()
+        	scene.name = xmlScene.name.text()
+            scene.type = xmlScene.type.text()
+            scene.deviceNetworkId = "ISY:SCN:${scene.address.replaceAll(" ", ".")}"
+            scene.status = 0
+    		xmlScene?.property.each { prop ->
+            	if (settings.debug) { log.debug "scene:${scene.name} property:${prop}" }
+            	if (prop.@id.equals('ST') && prop.@value) {
+            		scene.status = isy2stLevel(prop.@value)
+                }
+            }
+        
+            state.scenes[scene.address] = scene
+            
+            if (settings.debug && (printed % printInterval) == 0) {
+                log.debug "adding scene:[${scene}]"
+            }
+        }
+    	printed += 1
     }
     log.debug "parseQueryNodes() complete"
 }
@@ -501,7 +528,7 @@ def parseQueryVariables(resp) {
         	def variable = [:]
             variable.uniqueId = uniqueId
             variable.id = xmlVar.@id
-            variable.type = xmlVar.@type
+            variable.type = "scene"
             variable.value = xmlVar.val.text()
     
             state.variables[uniqueId] = variable
@@ -697,6 +724,10 @@ def getNodes() {
     if (!state.nodes) { state.nodes = [:] }
     state.nodes
 }
+def getScenes() {
+    if (!state.scenes) { state.scenes = [:] }
+    state.scenes
+}
 def getVariables() {
 	if (!state.variables) { state.variables = [:] }
     state.variables
@@ -814,6 +845,7 @@ def initialize() {
     
     def isyHub = getIsyHub()
     def nodes = getNodes()
+    def scenes = getScenes()
     def nodeTypes = [
     	'1.32.68.0':	'ISY Dimmer',		// Dimmer Switch
     	'1.66.68.0':	'ISY Dimmer',		// Dimmer Switch
@@ -823,6 +855,7 @@ def initialize() {
         '5.11.16.0':	'ISY Thermostat',	// Thermostat
         '2.42.68.0':	'ISY Switch',		// On/Off Switch
         '2.56.67.0':	'ISY Switch',		// On/Off Plugin Module (exterior)
+        '7.0.65.0':		'ISY Switch',		// I/O Link Replay
     ]
 
 	if (!isyHub) { return }
@@ -849,6 +882,25 @@ def initialize() {
            } else {
             	log.warn "Unknown device type ${node}"
            }
+        }
+    }
+    
+    settings.selectedScenes.each { sceneAddr ->
+        def scene = scenes.find { it.value.name == sceneAddr }
+        def d = getChildDevices()?.find { it.device.deviceNetworkId == scene.value.deviceNetworkId }
+        if (!d) {
+            def data = [
+                "name": scene.value.name,
+                "nodeAddress": scene.value.address,
+                "deviceNetworkId": scene.value.deviceNetworkId,
+                "status": scene.value.status,
+            ]
+            log.debug("Adding scene [${scene.value.name}] to [${isyHub.value.hub}] as [${scene.value.deviceNetworkId}]: ${data}")
+            d = addChildDevice("raven42", 'ISY Scene', scene.value.deviceNetworkId, isyHub?.value.hub, [
+                "label": scene.value.name,
+                "data": data,
+            ])
+            d.update()
         }
     }
     
