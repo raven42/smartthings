@@ -11,7 +11,7 @@
  *  for the specific language governing permissions and limitations under the License.
  */
 metadata {
-	definition (name: "ISY Switch", namespace: "raven42", author: "David Hegland") {
+	definition (name: "ISY Scene", namespace: "raven42", author: "David Hegland") {
 		capability "Actuator"
 		capability "Switch"
         capability "Polling"
@@ -26,7 +26,7 @@ metadata {
 	tiles (scale: 2) {
 		multiAttributeTile(name:"switch", type: "lighting", width: 6, height: 4, canChangeIcon: true){
 			tileAttribute ("device.switch", key: "PRIMARY_CONTROL") {
-				attributeState "on", label:'${name}', action:"switch.off", icon:"st.switches.switch.on", nextState:"off", backgroundColor: "#79b821"
+				attributeState "on", label:'Run Scene', action:"switch.on", icon:"st.switches.switch.on", nextState:"on", backgroundColor: "#79b821"
 				attributeState "off", label:'${name}', action:"switch.on", icon:"st.switches.switch.off", nextState:"on", backgroundColor: "#ffffff"
 			}
 		}
@@ -46,13 +46,7 @@ metadata {
 def statusUpdate(xml) {
 	def level = device.getDataValue("status")
     if (xml.status) {
-    	if (xml.status.text().equals("Off")) {
-        	level = 0
-        } else if (xml.status.text().equals("On")) {
-        	level = 100
-        } else {
-    		level = xml.status.text() as int
-        }
+    	level = xml.status.text() as int
 
         log.debug "dm.statusUpdate() device.status:${device.getDataValue("status")} -> status:${level} xml:${xml}"
         if (device.getDataValue("status") != level) {
@@ -148,6 +142,10 @@ def off() {
     parent.restGet(device, "/rest/nodes/${device.getDataValue("nodeAddress").replaceAll(" ", "%20")}/cmd/DOF", [callback:offResp])
 }
 
+def push() {
+	def dni = device.getDataValue("deviceNetworkId")
+	log.debug "dm.push() called for device:${dni}"
+}
 
 //////////////////////////////////////////////////////////////////////////////////
 // Helper routines
