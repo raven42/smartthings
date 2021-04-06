@@ -850,6 +850,7 @@ def initialize() {
     	'1.32.68.0':	'ISY Dimmer',		// Dimmer Switch
     	'1.66.68.0':	'ISY Dimmer',		// Dimmer Switch
         '1.14.67.0':	'ISY Dimmer',		// Dimmer Plugin Module
+        '1.45.68.0':	'ISY Dimmer',		// 1000W Wall Dimmer Switch
         '16.8.68.0':	'ISY Leak Sensor',	// Leak Sensor
         '2.55.72.0':	'ISY Switch',		// Plugin On/Off Module
         '5.11.16.0':	'ISY Thermostat',	// Thermostat
