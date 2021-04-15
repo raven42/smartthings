@@ -424,6 +424,10 @@ def parseQueryNodes(resp) {
             if (settings.debug && (printed % printInterval) == 0) {
                 log.debug "adding scene:[${scene}]"
             }
+        } else {
+        	// Update existing info with data from ISY
+            def scene = scenes[xmlScene.address.text()]
+            scene.name = xmlScene.name.text()
         }
     	printed += 1
     }
