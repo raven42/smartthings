@@ -223,7 +223,7 @@ def clearNodesPage() {
 }
 
 def clearNodesOpPage() {
-	state.devices = [:]
+	state.nodes = [:]
     settings.remove("selectedNodes")
 	
     log.debug "settings:${settings}"
@@ -396,6 +396,10 @@ def parseQueryNodes(resp) {
             if (settings.debug && (printed % printInterval) == 0) {
                 log.debug "adding node:[${node}]"
             }
+        } else {
+        	// Update existing info with data from ISY
+            def node = nodes[xmlNode.address.text()]
+            node.name = xmlNode.name.text()
         }
         printed += 1
     }
@@ -853,10 +857,11 @@ def initialize() {
     def nodeTypes = [
     	'1.32.68.0':	'ISY Dimmer',		// Dimmer Switch
     	'1.66.68.0':	'ISY Dimmer',		// Dimmer Switch
+        '1.32.69.0':	'ISY Dimmer',		// Dimmer Switch
         '1.14.67.0':	'ISY Dimmer',		// Dimmer Plugin Module
         '1.45.68.0':	'ISY Dimmer',		// 1000W Wall Dimmer Switch
         '16.8.68.0':	'ISY Leak Sensor',	// Leak Sensor
-        '2.55.72.0':	'ISY Switch',		// Plugin On/Off Module
+        '2.55.72.0':	'ISY Switch',		// On/Off Plugin Module
         '5.11.16.0':	'ISY Thermostat',	// Thermostat
         '2.42.68.0':	'ISY Switch',		// On/Off Switch
         '2.56.67.0':	'ISY Switch',		// On/Off Plugin Module (exterior)
