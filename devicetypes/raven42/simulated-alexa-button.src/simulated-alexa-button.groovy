@@ -41,13 +41,21 @@ metadata {
 }
 
 def parse(String description) {
+	log.debug "desc: ${description}"
+}
+
+def turnOffSwitch() {
+	log.debug "reset"
+	sendEvent(name: "switch", value: "off", isStateChanged: true, display: false)
+	sendEvent(name: "contact", value: "open", isStateChange: true)	
 }
 
 def push() {
+	log.debug "triggered"
 	sendEvent(name: "switch", value: "on", isStateChange: true, display: false)
-	sendEvent(name: "switch", value: "off", isStateChange: true, display: false)	
-	sendEvent(name: "contact", value: "open", isStateChange: true)	
+	sendEvent(name: "contact", value: "closed", isStateChange: true)	
 	sendEvent(name: "momentary", value: "pushed", isStateChange: true)
+    runIn(1, turnOffSwitch)
 }
 
 def on() {
